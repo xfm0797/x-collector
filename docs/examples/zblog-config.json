@@ -1,0 +1,9 @@
+{
+  "cms_type": "zblog",
+  "site_url": "https://yourblog.com",
+  "api_path": "/zb_system/xml-rpc/index.php",
+  "username": "admin",
+  "password": "your_password",
+  "default_category": "技术",
+  "default_status": "publish"
+}

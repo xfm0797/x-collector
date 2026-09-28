@@ -1,0 +1,19 @@
+{
+  "output_dir": "C:/blog",
+  "post_dir": "source/_posts",
+  "filenaming": "date-title",
+  "image_handling": "download_local",
+  "default_category": "未分类",
+  "front_matter": {
+    "include_author": true,
+    "include_excerpt": true,
+    "include_cover": false,
+    "include_source": true,
+    "custom_fields": [
+      {
+        "key": "source_url",
+        "value": "{{原URL}}"
+      }
+    ]
+  }
+}

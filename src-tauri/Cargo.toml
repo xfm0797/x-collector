@@ -1,0 +1,41 @@
+[package]
+name = "x-collector"
+version = "0.0.1"
+description = "枫铃采集器 — 关键词采集 + 内容清洗 + 多平台发布"
+authors = ["XFM"]
+edition = "2021"
+repository = "https://github.com/xfm0797/x-collector"
+
+[lib]
+name = "x_collector_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "socks", "cookies"] }
+scraper = "0.20"
+html2md = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+tokio = { version = "1", features = ["time", "rt", "macros"] }
+regex = "1"
+rand = "0.8"
+rust-embed = { version = "8", features = ["compression"] }
+encoding_rs = "0.8"
+url = "2"
+once_cell = "1"
+urlencoding = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

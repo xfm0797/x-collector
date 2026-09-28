@@ -1,0 +1,14 @@
+{
+  "cms_type": "wordpress",
+  "site_url": "https://yourblog.com",
+  "api_path": "/xmlrpc.php",
+  "username": "admin",
+  "app_password": "xxxx xxxx xxxx xxxx",
+  "default_category": "技术",
+  "default_status": "publish",
+  "tag_mapping": {
+    "Rust": "Rust",
+    "TypeScript": "前端",
+    "AI": "人工智能"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "cms_type": "typecho",
+  "site_url": "https://yourblog.com",
+  "api_path": "/action/xmlrpc",
+  "username": "admin",
+  "password": "your_password",
+  "default_category": "技术",
+  "default_status": "publish"
+}

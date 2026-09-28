@@ -1,0 +1,28 @@
+{
+  "profiles": [
+    {
+      "name": "轻度（保持可读性优先）",
+      "intensity": "light",
+      "synonym_ratio": 15,
+      "sentence_ratio": 10,
+      "paragraph_shuffle": false,
+      "rewrite_ends": false
+    },
+    {
+      "name": "中等（推荐默认）",
+      "intensity": "medium",
+      "synonym_ratio": 30,
+      "sentence_ratio": 20,
+      "paragraph_shuffle": false,
+      "rewrite_ends": false
+    },
+    {
+      "name": "深度（最大化差异）",
+      "intensity": "heavy",
+      "synonym_ratio": 45,
+      "sentence_ratio": 40,
+      "paragraph_shuffle": true,
+      "rewrite_ends": true
+    }
+  ]
+}

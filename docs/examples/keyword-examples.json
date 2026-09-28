@@ -1,0 +1,37 @@
+{
+  "tasks": [
+    {
+      "keyword": "Rust 教程",
+      "group_name": "编程",
+      "search_engine": "bing",
+      "match_mode": "title",
+      "max_pages": 3,
+      "interval_minutes": 0
+    },
+    {
+      "keyword": "Tauri 开发",
+      "group_name": "编程",
+      "search_engine": "google",
+      "match_mode": "title_or_content",
+      "max_pages": 2,
+      "interval_minutes": 0
+    },
+    {
+      "keyword": "人工智能",
+      "group_name": "科技",
+      "search_engine": "baidu",
+      "match_mode": "title",
+      "max_pages": 5,
+      "interval_minutes": 120
+    },
+    {
+      "keyword": "前端面试题",
+      "group_name": "编程",
+      "search_engine": "sogou",
+      "site_limit": "mp.weixin.qq.com",
+      "match_mode": "title",
+      "max_pages": 2,
+      "interval_minutes": 0
+    }
+  ]
+}
