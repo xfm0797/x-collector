@@ -7,6 +7,7 @@ pub mod parser;
 pub mod rewriter;
 pub mod rss_collector;
 pub mod search_collector;
+pub mod selector_inspector;
 pub mod sentence_rewriter;
 pub mod site_adapters;
 pub mod synonym_dict;

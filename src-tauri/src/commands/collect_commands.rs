@@ -40,7 +40,7 @@ pub struct CollectSummary {
 }
 
 /// 从设置表读取抓取配置
-fn load_fetch_settings(conn: &rusqlite::Connection) -> FetchSettings {
+pub(crate) fn load_fetch_settings(conn: &rusqlite::Connection) -> FetchSettings {
     let get = |k: &str| SettingsRepo::get(conn, k);
     FetchSettings {
         timeout: get("collect_timeout").and_then(|v| v.parse().ok()).unwrap_or(30),

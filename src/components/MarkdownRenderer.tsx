@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
@@ -13,6 +14,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className 
   return (
     <div className={`markdown-body text-[14px] leading-7 text-slate-800 ${className || ''}`}>
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => <h1 className="mt-6 mb-3 text-2xl font-bold">{children}</h1>,
           h2: ({ children }) => <h2 className="mt-5 mb-2 text-xl font-semibold">{children}</h2>,
@@ -26,8 +28,11 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className 
             </blockquote>
           ),
           table: ({ children }) => (
-            <table className="my-3 w-full border-collapse text-sm">{children}</table>
+            <div className="my-3 overflow-x-auto">
+              <table className="w-full border-collapse text-sm">{children}</table>
+            </div>
           ),
+          tr: ({ children }) => <tr className="border-b border-slate-200 even:bg-slate-50">{children}</tr>,
           th: ({ children }) => (
             <th className="border border-slate-300 bg-slate-100 px-2 py-1 text-left font-semibold">{children}</th>
           ),

@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Table, Button, Space, Tag, Switch, Popconfirm, message, Modal, Form, Input, Select } from 'antd';
-import { PlusOutlined, DeleteOutlined, SyncOutlined, RadarChartOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, SyncOutlined, RadarChartOutlined, AppstoreOutlined, AimOutlined } from '@ant-design/icons';
 import ProgressBar from '@/components/ProgressBar';
+import VisualSelector from '@/components/VisualSelector';
+import TemplateLibrary from '@/components/TemplateLibrary';
 import { useSourceStore } from '@/stores/sourceStore';
 import { useCollectProgress } from '@/hooks/useCollect';
 import { discoverFromSitemap } from '@/services/collectService';
@@ -34,6 +36,9 @@ const SourceManager: React.FC = () => {
   const [sitemapOpen, setSitemapOpen] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<string[]>([]);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  /** 可视化选择器状态：目标表单字段名 */
+  const [visualTarget, setVisualTarget] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -147,6 +152,9 @@ const SourceManager: React.FC = () => {
             <Button icon={<RadarChartOutlined />} onClick={() => setSitemapOpen(true)}>
               从站点地图发现
             </Button>
+            <Button icon={<AppstoreOutlined />} onClick={() => setTemplateOpen(true)}>
+              模板库
+            </Button>
             <Button
               type="primary"
               icon={<PlusOutlined />}
@@ -221,13 +229,62 @@ const SourceManager: React.FC = () => {
               <Input placeholder="默认" />
             </Form.Item>
           </div>
-          <Form.Item name="selector_content" label="正文选择器（可选）" tooltip="CSS 选择器，留空使用智能提取">
+          <Form.Item
+            name="selector_content"
+            label={
+              <span className="flex items-center gap-2">
+                正文选择器（可选）
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<AimOutlined />}
+                  className="!p-0"
+                  onClick={() => setVisualTarget('selector_content')}
+                >
+                  可视化选择
+                </Button>
+              </span>
+            }
+            tooltip="CSS 选择器，留空使用智能提取"
+          >
             <Input placeholder="例如：div.article-content" />
           </Form.Item>
-          <Form.Item name="selector_title" label="标题选择器（可选）">
+          <Form.Item
+            name="selector_title"
+            label={
+              <span className="flex items-center gap-2">
+                标题选择器（可选）
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<AimOutlined />}
+                  className="!p-0"
+                  onClick={() => setVisualTarget('selector_title')}
+                >
+                  可视化选择
+                </Button>
+              </span>
+            }
+          >
             <Input placeholder="例如：h1.title" />
           </Form.Item>
-          <Form.Item name="remove_selectors" label="移除元素选择器（逗号或换行分隔，可选）">
+          <Form.Item
+            name="remove_selectors"
+            label={
+              <span className="flex items-center gap-2">
+                移除元素选择器（逗号或换行分隔，可选）
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<AimOutlined />}
+                  className="!p-0"
+                  onClick={() => setVisualTarget('remove_selectors')}
+                >
+                  可视化选择
+                </Button>
+              </span>
+            }
+          >
             <Input.TextArea rows={2} placeholder="例如：div.ad, div.related-posts" />
           </Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked">
@@ -260,6 +317,45 @@ const SourceManager: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {/* 可视化选择器 */}
+      <VisualSelector
+        open={visualTarget !== null}
+        onClose={() => setVisualTarget(null)}
+        initialUrl={form.getFieldValue('url') || ''}
+        onPick={(selector) => {
+          if (!visualTarget) return;
+          if (visualTarget === 'remove_selectors') {
+            // 追加到已有移除列表
+            const existing = String(form.getFieldValue('remove_selectors') || '').trim();
+            const merged = existing ? `${existing}, ${selector}` : selector;
+            form.setFieldValue('remove_selectors', merged);
+          } else {
+            form.setFieldValue(visualTarget, selector);
+          }
+        }}
+      />
+
+      {/* 模板库 */}
+      <TemplateLibrary
+        open={templateOpen}
+        mode="source"
+        onClose={() => setTemplateOpen(false)}
+        onApplySource={(values) => {
+          const { remove_selectors, ...rest } = values;
+          form.setFieldsValue({
+            ...rest,
+            ...(remove_selectors ? { remove_selectors: remove_selectors.join(', ') } : {}),
+          });
+        }}
+        onApplyCleaning={(selectors) => {
+          const existing = String(form.getFieldValue('remove_selectors') || '').trim();
+          form.setFieldValue(
+            'remove_selectors',
+            existing ? [...new Set([...existing.split(/[\n,，]+/).map((s) => s.trim()).filter(Boolean), ...selectors])].join(', ') : selectors.join(', '),
+          );
+        }}
+      />
     </div>
   );
 };

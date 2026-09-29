@@ -29,3 +29,44 @@ export async function collectFromSource(id: number): Promise<CollectSummary> {
 export async function discoverFromSitemap(url: string): Promise<string[]> {
   return invoke('discover_from_sitemap', { url });
 }
+
+// ── 可视化选择器 ──────────────────────────────────────────
+
+export interface DomNode {
+  tag: string;
+  id: string | null;
+  classes: string[];
+  css: string;
+  path: string;
+  text_preview: string | null;
+  text_length: number;
+  children: DomNode[];
+}
+
+export interface PageInspect {
+  final_url: string;
+  title: string;
+  dom: DomNode;
+}
+
+export interface SelectorMatch {
+  index: number;
+  text_preview: string;
+  html_length: number;
+}
+
+export interface SelectorTestResult {
+  selector: string;
+  matched: number;
+  matches: SelectorMatch[];
+}
+
+/** 抓取页面并返回 DOM 结构树 */
+export async function inspectPage(url: string): Promise<PageInspect> {
+  return invoke('inspect_page', { url });
+}
+
+/** 在页面上测试 CSS 选择器 */
+export async function testSelector(url: string, css: string): Promise<SelectorTestResult> {
+  return invoke('test_selector', { url, css });
+}

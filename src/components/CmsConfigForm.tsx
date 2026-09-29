@@ -1,6 +1,8 @@
 import React from 'react';
 import { Form, Input, Select, Modal, Button, Space, message } from 'antd';
+import { AppstoreOutlined } from '@ant-design/icons';
 import { testCmsConnection } from '@/services/publishService';
+import { cmsTemplates } from '@/data/templates';
 import type { CmsConnectionInput, CmsConnection } from '@/types/publish';
 
 interface CmsConfigFormProps {
@@ -114,6 +116,25 @@ const CmsConfigForm: React.FC<CmsConfigFormProps> = ({ open, initial, onCancel, 
       }
     >
       <Form form={form} layout="vertical">
+        <Form.Item label={<span className="flex items-center gap-1"><AppstoreOutlined /> 从模板快速填充</span>}>
+          <Select
+            allowClear
+            placeholder="选择 CMS 配置模板（不影响已填内容）"
+            options={cmsTemplates.map((t) => ({ value: t.key, label: `${t.name} — ${t.description}` }))}
+            onChange={(key) => {
+              const t = cmsTemplates.find((c) => c.key === key);
+              if (t) {
+                form.setFieldsValue({
+                  name: form.getFieldValue('name') || t.values.name,
+                  cms_type: t.values.cms_type,
+                  api_path: t.values.api_path,
+                  default_status: t.values.default_status,
+                });
+                message.success(`已应用模板「${t.name}」`);
+              }
+            }}
+          />
+        </Form.Item>
         <Form.Item name="name" label="连接名称" rules={[{ required: true, message: '请输入连接名称' }]}>
           <Input placeholder="例如：我的 WordPress 博客" />
         </Form.Item>

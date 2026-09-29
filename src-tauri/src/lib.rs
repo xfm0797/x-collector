@@ -49,6 +49,9 @@ pub fn run() {
             commands::collect_commands::run_keyword_task,
             commands::collect_commands::collect_from_source,
             commands::collect_commands::discover_from_sitemap,
+            // 可视化选择器
+            commands::selector_commands::inspect_page,
+            commands::selector_commands::test_selector,
             // 伪原创
             commands::rewrite_commands::get_rewrite_options,
             commands::rewrite_commands::save_rewrite_options,

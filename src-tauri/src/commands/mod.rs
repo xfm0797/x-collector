@@ -4,5 +4,6 @@ pub mod help_commands;
 pub mod keyword_commands;
 pub mod publish_commands;
 pub mod rewrite_commands;
+pub mod selector_commands;
 pub mod settings_commands;
 pub mod source_commands;
