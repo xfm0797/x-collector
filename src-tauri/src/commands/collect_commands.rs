@@ -29,14 +29,22 @@ pub async fn collect_single_page(
     emit_progress(&app, "抓取页面", 0, 1, &url);
     let mut input = collect_service::fetch_page(&fetcher, &url, None, &[]).await?;
 
+    let duplicate = {
+        let conn = state.conn()?;
+        collect_service::is_duplicate(&conn, &input)
+    };
+    if duplicate {
+        return Err(format!("文章已存在（URL 或内容重复）：{}", input.title));
+    }
+
+    // 伪原创
+    collect_service::apply_rewrite(&mut input, &rewrite_config);
+    if collect_settings.localize_images {
+        collect_service::localize_images(&mut input, &fetcher).await;
+    }
+
     let id = {
         let conn = state.conn()?;
-        // 去重检查
-        if collect_service::is_duplicate(&conn, &input) {
-            return Err(format!("文章已存在（URL 或内容重复）：{}", input.title));
-        }
-        // 伪原创
-        collect_service::apply_rewrite(&mut input, &rewrite_config);
         let id = collect_service::save_article(&conn, &input)?
             .ok_or_else(|| "文章已存在".to_string())?;
         collect_service::log(&conn, None, "manual", None, Some(&url), "success", "单页采集成功");
@@ -138,6 +146,9 @@ pub async fn run_keyword_task(
                 }
 
                 collect_service::apply_rewrite(&mut input, &rewrite_config);
+                if collect_settings.localize_images {
+                    collect_service::localize_images(&mut input, &fetcher).await;
+                }
 
                 let inserted = {
                     let conn = state.conn()?;
@@ -265,6 +276,9 @@ pub async fn collect_from_source(
                     continue;
                 }
                 collect_service::apply_rewrite(&mut input, &rewrite_config);
+                if collect_settings.localize_images {
+                    collect_service::localize_images(&mut input, &fetcher).await;
+                }
                 let inserted = {
                     let conn = state.conn()?;
                     let id = collect_service::save_article(&conn, &input)?;

@@ -204,6 +204,7 @@ const CollectTab: React.FC<TabProps> = ({ settings, num, get, onSave, saving }) 
   const [intervalMax, setIntervalMax] = useState(num?.('collect_interval_max', 5) ?? 5);
   const [retries, setRetries] = useState(num?.('collect_retries', 3) ?? 3);
   const [ua, setUa] = useState(get('collect_user_agent', ''));
+  const [localizeImages, setLocalizeImages] = useState(get('collect_localize_images', 'false') === 'true');
   useEffect(() => {
     setTimeout_(Number(settings.collect_timeout ?? 30) || 30);
     setConcurrency(Number(settings.collect_concurrency ?? 3) || 3);
@@ -211,6 +212,7 @@ const CollectTab: React.FC<TabProps> = ({ settings, num, get, onSave, saving }) 
     setIntervalMax(Number(settings.collect_interval_max ?? 5) || 5);
     setRetries(Number(settings.collect_retries ?? 3) || 3);
     setUa(settings.collect_user_agent ?? '');
+    setLocalizeImages((settings.collect_localize_images ?? 'false') === 'true');
   }, [settings]);
   return (
     <Form layout="vertical" className="max-w-md">
@@ -233,6 +235,12 @@ const CollectTab: React.FC<TabProps> = ({ settings, num, get, onSave, saving }) 
       <Form.Item label="自定义 User-Agent（留空使用随机轮换）">
         <Input value={ua} onChange={(e) => setUa(e.target.value)} placeholder="Mozilla/5.0 (Windows NT 10.0; Win64; x64)..." />
       </Form.Item>
+      <Form.Item
+        label="正文图片本地化"
+        extra="下载正文图片并以 data URI 内嵌，避免外链失效；会增加文章体积（单篇最多 20 张，总大小 10MB）"
+      >
+        <Switch checked={localizeImages} onChange={setLocalizeImages} />
+      </Form.Item>
       <Button
         type="primary"
         icon={<SaveOutlined />}
@@ -245,6 +253,7 @@ const CollectTab: React.FC<TabProps> = ({ settings, num, get, onSave, saving }) 
             collect_interval_max: String(intervalMax),
             collect_retries: String(retries),
             collect_user_agent: ua,
+            collect_localize_images: String(localizeImages),
           })
         }
       >

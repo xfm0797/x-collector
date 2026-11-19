@@ -16,6 +16,8 @@ pub struct CollectSettings {
     pub retries: u32,
     pub user_agent: String,
     pub proxy_url: String,
+    /// 是否把正文图片下载后内嵌为 data URI
+    pub localize_images: bool,
 }
 
 impl CollectSettings {
@@ -29,6 +31,9 @@ impl CollectSettings {
             retries: get("collect_retries").and_then(|v| v.parse().ok()).unwrap_or(3),
             user_agent: get("collect_user_agent").unwrap_or_default(),
             proxy_url: get("proxy_url").unwrap_or_default(),
+            localize_images: get("collect_localize_images")
+                .map(|v| v == "true")
+                .unwrap_or(false),
         }
     }
 

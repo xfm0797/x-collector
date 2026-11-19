@@ -63,6 +63,11 @@ pub fn apply_rewrite(input: &mut ArticleInput, config: &RewriteConfig) {
     }
 }
 
+/// 下载正文图片并以 data URI 内嵌（失败保留原链接）
+pub async fn localize_images(input: &mut ArticleInput, fetcher: &Fetcher) {
+    crate::utils::images::localize_article(input, fetcher).await;
+}
+
 /// 入库并写入去重缓存；URL 已存在时返回 None
 pub fn save_article(conn: &Connection, input: &ArticleInput) -> Result<Option<i64>, String> {
     let id = ArticleRepo::insert_if_new(conn, input).map_err(|e| e.to_string())?;

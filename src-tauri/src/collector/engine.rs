@@ -163,6 +163,86 @@ impl Fetcher {
         )
         .await
     }
+
+    /// 下载二进制资源（图片等）：跳过页面随机延迟，限制大小并复用重试
+    pub async fn fetch_bytes(
+        &self,
+        url: &str,
+        referer: Option<&str>,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, String), String> {
+        let settings = self.settings.clone();
+        let url_owned = url.to_string();
+        let client = self.client.clone();
+        let referer = referer.map(str::to_string);
+
+        crate::utils::retry::with_retry(
+            || {
+                let client = client.clone();
+                let url = url_owned.clone();
+                let settings = settings.clone();
+                let referer = referer.clone();
+                async move {
+                    let ua = (!settings.user_agent.is_empty())
+                        .then(|| settings.user_agent.as_str());
+                    let mut headers = anti_crawl::build_headers(&base_of(&url), ua);
+                    if let Some(referer) = referer
+                        .as_deref()
+                        .and_then(|r| reqwest::header::HeaderValue::from_str(r).ok())
+                    {
+                        headers.insert(reqwest::header::REFERER, referer);
+                    }
+
+                    let mut response = client
+                        .get(&url)
+                        .headers(headers)
+                        .send()
+                        .await
+                        .map_err(|e| classify_request_error(&e, settings.timeout))?;
+
+                    let status = response.status();
+                    let content_type = response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+
+                    if !status.is_success() {
+                        let code = status.as_u16();
+                        let message = format!("HTTP {code}");
+                        return if is_retryable_status(code) {
+                            Err(RetryError::retryable(message))
+                        } else {
+                            Err(RetryError::fatal(message))
+                        };
+                    }
+
+                    let mut body: Vec<u8> = Vec::new();
+                    while let Some(chunk) = response
+                        .chunk()
+                        .await
+                        .map_err(|e| RetryError::retryable(format!("读取响应失败：{e}")))?
+                    {
+                        if body.len() + chunk.len() > max_bytes {
+                            return Err(RetryError::fatal(format!(
+                                "资源超过 {} KB 上限",
+                                max_bytes / 1024
+                            )));
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    if body.is_empty() {
+                        return Err(RetryError::retryable("资源内容为空"));
+                    }
+                    Ok((body, content_type))
+                }
+            },
+            settings.retries,
+            800,
+        )
+        .await
+    }
 }
 
 /// 请求发送失败：区分超时/连接类临时故障与永久失败
