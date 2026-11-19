@@ -65,9 +65,26 @@ impl Fetcher {
 
     /// 抓取页面并解码为文本
     pub async fn fetch_text(&self, url: &str) -> Result<FetchedPage, String> {
+        self.fetch_text_with(url, None, &[]).await
+    }
+
+    /// 抓取页面：可覆盖 User-Agent 并附加站点专用请求头
+    pub async fn fetch_text_with(
+        &self,
+        url: &str,
+        user_agent: Option<&str>,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<FetchedPage, String> {
         let settings = self.settings.clone();
         let url_owned = url.to_string();
         let client = self.client.clone();
+        let user_agent = user_agent.map(str::to_string).or_else(|| {
+            (!settings.user_agent.is_empty()).then(|| settings.user_agent.clone())
+        });
+        let extra_headers: Vec<(String, String)> = extra_headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
 
         super::anti_crawl::random_delay(settings.interval_min, settings.interval_max).await;
 
@@ -76,13 +93,21 @@ impl Fetcher {
                 let client = client.clone();
                 let url = url_owned.clone();
                 let settings = settings.clone();
+                let user_agent = user_agent.clone();
+                let extra_headers = extra_headers.clone();
                 async move {
+                    let mut headers = anti_crawl::build_headers(&base_of(&url), user_agent.as_deref());
+                    for (name, value) in &extra_headers {
+                        if let (Ok(name), Ok(value)) = (
+                            name.parse::<reqwest::header::HeaderName>(),
+                            value.parse::<reqwest::header::HeaderValue>(),
+                        ) {
+                            headers.insert(name, value);
+                        }
+                    }
                     let base = client
                         .get(&url)
-                        .headers(anti_crawl::build_headers(
-                            &base_of(&url),
-                            if settings.user_agent.is_empty() { None } else { Some(&settings.user_agent) },
-                        ))
+                        .headers(headers)
                         .send()
                         .await
                         .map_err(|e| classify_request_error(&e, settings.timeout))?;

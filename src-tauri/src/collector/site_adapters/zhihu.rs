@@ -4,6 +4,8 @@
 pub const CONTENT_SELECTOR: &str = "div.Post-RichTextContainer, article";
 
 /// 附加请求头（知乎要求）
+pub const EXTRA_HEADERS: &[(&str, &str)] = &[("x-requested-with", "XMLHttpRequest")];
+
 pub fn extra_headers() -> Vec<(&'static str, &'static str)> {
-    vec![("x-requested-with", "XMLHttpRequest")]
+    EXTRA_HEADERS.to_vec()
 }

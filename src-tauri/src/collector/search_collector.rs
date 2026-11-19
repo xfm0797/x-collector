@@ -132,7 +132,11 @@ pub fn parse_search_results(html: &str, engine: &str) -> Vec<SearchItem> {
         for item in doc.select(&item_selector) {
             let Some(link) = item.select(&link_selector).next() else { continue };
             let Some(href) = link.value().attr("href") else { continue };
-            let title = link.text().collect::<String>().trim().to_string();
+            let mut title = link.text().collect::<String>().trim().to_string();
+            if title.is_empty() {
+                // 部分结果页的标题放在 title 属性上
+                title = link.value().attr("title").unwrap_or("").trim().to_string();
+            }
             if title.is_empty() || href.is_empty() {
                 continue;
             }
@@ -172,5 +176,13 @@ mod tests {
         assert!(normalize_result_url("javascript:alert(1)").is_none());
         assert!(normalize_result_url("mailto:a@b.com").is_none());
         assert!(normalize_result_url("/relative/path").is_none());
+    }
+
+    #[test]
+    fn falls_back_to_link_title_attribute() {
+        let html = r#"<li class="b_algo"><h2><a href="https://example.com/x" title="备用标题"></a></h2></li>"#;
+        let items = parse_search_results(html, "bing");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "备用标题");
     }
 }

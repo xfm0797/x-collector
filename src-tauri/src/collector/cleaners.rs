@@ -27,6 +27,9 @@ const DEFAULT_REMOVE: &[&str] = &[
     "div.share",
     "div.social",
     "div.copyright",
+    "[class*='advert']",
+    "[id*='advert']",
+    "[class*='breadcrumb']",
     "[class*='sponsor']",
     "[id*='google_ads']",
 ];

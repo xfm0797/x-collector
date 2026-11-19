@@ -3,6 +3,7 @@ use crate::domain::ArticleInput;
 use super::cleaners::{clean_fragment, CleanOptions};
 use super::engine::Fetcher;
 use super::parser::{parse, CustomSelectors, ParsedPage};
+use super::site_adapters;
 
 /// 单页采集流程：抓取 → 解析 → 清洗 → 转 Markdown
 pub async fn collect_page(
@@ -11,15 +12,24 @@ pub async fn collect_page(
     custom: Option<&CustomSelectors>,
     remove_selectors: &[String],
 ) -> Result<(ArticleInput, ParsedPage), String> {
-    let page = fetcher.fetch_text(url).await?;
+    let profile = site_adapters::profile_for(url);
+    let page = match profile {
+        Some(p) => fetcher.fetch_text_with(url, p.user_agent, p.extra_headers).await?,
+        None => fetcher.fetch_text(url).await?,
+    };
     let parsed = parse(&page.text, &page.final_url, custom);
 
     if parsed.title.is_empty() && parsed.content_html.is_empty() {
         return Err(format!("无法从页面提取内容：{url}"));
     }
 
+    // 用户自定义移除规则 + 站点专用广告/推荐区清理
+    let mut remove = remove_selectors.to_vec();
+    if let Some(p) = site_adapters::profile_for(&page.final_url) {
+        remove.extend(p.extra_remove.iter().map(|s| s.to_string()));
+    }
     let opts = CleanOptions {
-        remove_selectors: remove_selectors.to_vec(),
+        remove_selectors: remove,
         keep_images: true,
     };
     let cleaned = clean_fragment(&parsed.content_html, &page.final_url, &opts);

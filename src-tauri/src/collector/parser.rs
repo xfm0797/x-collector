@@ -9,6 +9,8 @@ static STRUCT_SEL: Lazy<Selector> =
     Lazy::new(|| Selector::parse("article, div, section, main, td").expect("结构选择器"));
 /// 链接元素（用于计算链接密度）
 static LINK_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("a").expect("链接选择器"));
+/// 段落元素（用于计算段落密度）
+static P_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("p").expect("段落选择器"));
 /// body 兜底
 static BODY_SEL: Lazy<Selector> = Lazy::new(|| Selector::parse("body").expect("body 选择器"));
 /// JSON-LD 结构化数据
@@ -145,20 +147,42 @@ pub fn parse(html: &str, url: &str, custom: Option<&CustomSelectors>) -> ParsedP
     let content_css = custom
         .and_then(|c| c.content.clone())
         .or_else(|| site_adapters::content_selector_for(url));
-    let content_el = content_css
+    let explicit_el = content_css
         .as_deref()
         .and_then(|css| try_selector(css))
-        .and_then(|sel| doc.select(&sel).next())
-        .or_else(|| smart_content_element(&doc));
+        .and_then(|sel| doc.select(&sel).next());
 
-    if let Some(el) = content_el {
-        result.content_html = el.inner_html();
-    } else if let Some(body) = doc.select(&BODY_SEL).next() {
-        // 兜底：结构提取失败时保留整个 body，避免标题存在但正文为空
-        result.content_html = body.inner_html();
+    let mut content_html = explicit_el
+        .map(|el| el.inner_html())
+        .unwrap_or_default();
+
+    // 命中的容器内容过少（站点改版 / 选择器失配）时，用智能提取补齐
+    if text_len(&content_html) < MIN_CONTENT_TEXT {
+        if let Some(smart) = smart_content_element(&doc) {
+            let candidate = smart.inner_html();
+            if text_len(&candidate) > text_len(&content_html) {
+                content_html = candidate;
+            }
+        }
     }
+    if content_html.trim().is_empty() {
+        if let Some(body) = doc.select(&BODY_SEL).next() {
+            // 兜底：保留整个 body，避免标题存在但正文为空
+            content_html = body.inner_html();
+        }
+    }
+    result.content_html = content_html;
 
     result
+}
+
+/// 正文有效文本下限（低于此值认为提取失败，换用智能提取）
+const MIN_CONTENT_TEXT: usize = 80;
+
+/// HTML 片段的纯文本长度（粗略统计）
+fn text_len(html: &str) -> usize {
+    let fragment = Html::parse_fragment(html);
+    fragment.root_element().text().map(|t| t.trim().len()).sum()
 }
 
 /// 清理标题中的站点后缀，如 " - 知乎"
@@ -192,6 +216,28 @@ fn smart_content_element(doc: &Html) -> Option<ElementRef<'_>> {
         )
         .to_lowercase();
         let mut score = text_len as i64;
+        // 语义标签加分；表格单元格通常是布局
+        match el.value().name() {
+            "article" => score += 500,
+            "main" => score += 350,
+            "section" => score += 80,
+            "td" => score -= 100,
+            _ => {}
+        }
+        // 段落密度：正文通常由多个较长 <p> 组成
+        let (p_count, p_text) = el.select(&P_SEL).fold((0usize, 0usize), |(count, total), p| {
+            let len: usize = p.text().map(|t| t.trim().len()).sum();
+            if len >= 20 {
+                (count + 1, total + len)
+            } else {
+                (count, total)
+            }
+        });
+        score += (p_count.min(20) as i64) * 60;
+        if text_len > 400 && p_text * 2 < text_len {
+            // 段落文本占比过低，更像导航 / 列表页
+            score -= 400;
+        }
         for hint in ["content", "article", "post", "entry", "main", "text", "blog", "markdown"] {
             if class_id.contains(hint) {
                 score += 300;
