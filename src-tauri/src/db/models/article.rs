@@ -199,7 +199,7 @@ impl ArticleRepo {
             .as_ref()
             .map(|t| serde_json::to_string(t).unwrap_or_default());
         conn.execute(
-            "UPDATE articles SET title = ?1, url = ?2, source = COALESCE(?3, source), author = COALESCE(?4, author),
+            "UPDATE articles SET title = ?1, url = COALESCE(NULLIF(?2, ''), url), source = COALESCE(?3, source), author = COALESCE(?4, author),
              content_md = COALESCE(?5, content_md), excerpt = COALESCE(?6, excerpt), tags = COALESCE(?7, tags),
              category = COALESCE(?8, category), status = 'edited', updated_at = ?9
              WHERE id = ?10",

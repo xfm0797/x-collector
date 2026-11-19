@@ -71,6 +71,41 @@ mod tests {
     }
 
     #[test]
+    fn update_keeps_url_when_input_empty() {
+        let conn = setup();
+        let input = ArticleInput {
+            title: "原标题".to_string(),
+            url: "https://example.com/original".to_string(),
+            ..Default::default()
+        };
+        let id = ArticleRepo::insert_if_new(&conn, &input).unwrap().unwrap();
+
+        // 编辑表单未回传 url 时，不应清空已有地址
+        let edit = ArticleInput {
+            title: "新标题".to_string(),
+            url: String::new(),
+            ..Default::default()
+        };
+        ArticleRepo::update(&conn, id, &edit).unwrap();
+        let article = ArticleRepo::get(&conn, id).unwrap().unwrap();
+        assert_eq!(article.title, "新标题");
+        assert_eq!(article.url, "https://example.com/original");
+        assert_eq!(article.status, "edited");
+
+        // 传入新 url 时正常更新
+        let edit_with_url = ArticleInput {
+            title: "新标题".to_string(),
+            url: "https://example.com/new".to_string(),
+            ..Default::default()
+        };
+        ArticleRepo::update(&conn, id, &edit_with_url).unwrap();
+        assert_eq!(
+            ArticleRepo::get(&conn, id).unwrap().unwrap().url,
+            "https://example.com/new"
+        );
+    }
+
+    #[test]
     fn dedup_cache_flow() {
         let conn = setup();
         let url_hash = sha256_hex("https://example.com/a");
