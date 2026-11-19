@@ -5,6 +5,9 @@ use serde::Deserialize;
 use super::anti_crawl;
 use crate::utils::retry::RetryError;
 
+/// 单次响应体最大字节数（解压后），防止超大文件拖垮内存
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+
 /// 采集请求设置（从 settings 表读取）
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -93,10 +96,6 @@ impl Fetcher {
                         .to_string();
                     let retry_after = parse_retry_after(base.headers());
                     let final_url = base.url().to_string();
-                    let bytes = base
-                        .bytes()
-                        .await
-                        .map_err(|e| RetryError::retryable(format!("读取响应失败：{e}")))?;
 
                     if !status.is_success() {
                         let code = status.as_u16();
@@ -107,8 +106,30 @@ impl Fetcher {
                             Err(RetryError::fatal(message))
                         };
                     }
+                    if is_binary_content_type(&content_type) {
+                        return Err(RetryError::fatal(format!("不支持的内容类型：{content_type}")));
+                    }
 
-                    let text = decode_body(&bytes, &content_type);
+                    let mut response = base;
+                    let mut body: Vec<u8> = Vec::new();
+                    while let Some(chunk) = response
+                        .chunk()
+                        .await
+                        .map_err(|e| RetryError::retryable(format!("读取响应失败：{e}")))?
+                    {
+                        if body.len() + chunk.len() > MAX_BODY_BYTES {
+                            return Err(RetryError::fatal(format!(
+                                "响应体超过 {} MB 上限",
+                                MAX_BODY_BYTES / 1024 / 1024
+                            )));
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    if body.is_empty() {
+                        return Err(RetryError::retryable("响应内容为空"));
+                    }
+
+                    let text = decode_body(&body, &content_type);
                     Ok(FetchedPage { final_url, text })
                 }
             },
@@ -149,6 +170,37 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     Some(Duration::from_secs(secs.min(10)))
 }
 
+/// 图片 / 音视频 / 压缩包等二进制响应直接拒绝，避免解码出乱码
+fn is_binary_content_type(content_type: &str) -> bool {
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if ct.is_empty() {
+        return false;
+    }
+    if ct.starts_with("image/")
+        || ct.starts_with("audio/")
+        || ct.starts_with("video/")
+        || ct.starts_with("font/")
+    {
+        return true;
+    }
+    matches!(
+        ct.as_str(),
+        "application/pdf"
+            | "application/zip"
+            | "application/gzip"
+            | "application/x-gzip"
+            | "application/x-rar-compressed"
+            | "application/x-7z-compressed"
+            | "application/x-tar"
+            | "application/octet-stream"
+    )
+}
+
 /// 取 URL 的站点根（作为 Referer）
 fn base_of(url: &str) -> String {
     url::Url::parse(url)
@@ -182,6 +234,28 @@ mod tests {
 
         headers.insert(reqwest::header::RETRY_AFTER, "abc".parse().unwrap());
         assert_eq!(parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn binary_content_types_are_rejected() {
+        for ct in [
+            "image/png",
+            "video/mp4",
+            "application/pdf",
+            "application/octet-stream",
+            "application/zip; charset=binary",
+        ] {
+            assert!(is_binary_content_type(ct), "{ct} 应被拒绝");
+        }
+        for ct in [
+            "text/html; charset=utf-8",
+            "application/xhtml+xml",
+            "application/xml",
+            "application/json",
+            "",
+        ] {
+            assert!(!is_binary_content_type(ct), "{ct} 应被允许");
+        }
     }
 }
 
