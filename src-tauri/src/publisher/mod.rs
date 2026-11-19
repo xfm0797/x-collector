@@ -4,6 +4,37 @@ pub mod typecho_publisher;
 pub mod wordpress_publisher;
 pub mod zblog_publisher;
 
+use crate::db::models::{Article, CmsConnection};
+
+/// CMS 发布器注册表：按 CMS 类型分发到具体实现
+pub async fn publish(
+    cms_type: &str,
+    conn: &CmsConnection,
+    password: &str,
+    article: &Article,
+) -> Result<(String, String), String> {
+    match cms_type {
+        "wordpress" => wordpress_publisher::publish(conn, password, article).await,
+        "typecho" => typecho_publisher::publish(conn, password, article).await,
+        "zblog" => zblog_publisher::publish(conn, password, article).await,
+        _ => Err("自定义 CMS 发布暂未实现".to_string()),
+    }
+}
+
+/// CMS 连接测试注册表
+pub async fn test_connection(
+    cms_type: &str,
+    conn: &CmsConnection,
+    password: &str,
+) -> Result<String, String> {
+    match cms_type {
+        "wordpress" => wordpress_publisher::test_connection(conn, password).await,
+        "typecho" => typecho_publisher::test_connection(conn, password).await,
+        "zblog" => zblog_publisher::test_connection(conn, password).await,
+        _ => Err("自定义 CMS 暂不支持连接测试".to_string()),
+    }
+}
+
 /// 轻量 Markdown → HTML 转换（用于 CMS 发布正文）
 pub fn markdown_to_html(md: &str) -> String {
     let mut html = String::new();

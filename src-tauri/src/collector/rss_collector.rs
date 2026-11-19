@@ -2,6 +2,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::engine::Fetcher;
+use crate::utils::html::decode_entities;
 
 /// RSS / Atom 条目
 #[derive(Debug, Clone)]
@@ -98,12 +99,3 @@ pub fn parse_sitemap(xml: &str) -> Vec<String> {
         .collect()
 }
 
-/// 简单 HTML 实体解码
-pub fn decode_entities(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-}

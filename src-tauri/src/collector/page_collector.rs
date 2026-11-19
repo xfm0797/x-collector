@@ -1,4 +1,4 @@
-use crate::db::models::ArticleInput;
+use crate::domain::ArticleInput;
 
 use super::cleaners::{clean_fragment, CleanOptions};
 use super::engine::Fetcher;

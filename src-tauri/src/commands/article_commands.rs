@@ -7,7 +7,7 @@ use crate::AppState;
 /// 文章分页列表
 #[tauri::command]
 pub fn list_articles(state: State<'_, AppState>, query: ArticleQuery) -> Result<PageData, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.conn()?;
     let (list, total) = ArticleRepo::list(&conn, &query).map_err(|e| e.to_string())?;
     Ok(PageData {
         list,
@@ -28,7 +28,7 @@ pub struct PageData {
 /// 文章详情
 #[tauri::command]
 pub fn get_article(state: State<'_, AppState>, id: i64) -> Result<Article, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.conn()?;
     ArticleRepo::get(&conn, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "文章不存在".to_string())
@@ -39,7 +39,7 @@ type Article = crate::db::models::Article;
 /// 新建文章
 #[tauri::command]
 pub fn create_article(state: State<'_, AppState>, input: ArticleInput) -> Result<Article, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.conn()?;
     if input.title.trim().is_empty() {
         return Err("标题不能为空".to_string());
     }
@@ -52,28 +52,28 @@ pub fn create_article(state: State<'_, AppState>, input: ArticleInput) -> Result
 /// 更新文章
 #[tauri::command]
 pub fn update_article(state: State<'_, AppState>, id: i64, input: ArticleInput) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.conn()?;
     ArticleRepo::update(&conn, id, &input).map_err(|e| e.to_string())
 }
 
 /// 更新文章状态
 #[tauri::command]
 pub fn update_article_status(state: State<'_, AppState>, id: i64, status: String) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.conn()?;
     ArticleRepo::update_status(&conn, id, &status).map_err(|e| e.to_string())
 }
 
 /// 删除文章（单条/批量）
 #[tauri::command]
 pub fn delete_articles(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.conn()?;
     ArticleRepo::delete(&conn, &ids).map_err(|e| e.to_string())
 }
 
 /// 仪表盘统计
 #[tauri::command]
 pub fn get_dashboard_stats(state: State<'_, AppState>) -> Result<DashboardStats, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.conn()?;
     get_stats(&conn).map_err(|e| e.to_string())
 }
 
