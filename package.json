@@ -1,7 +1,7 @@
 {
   "name": "x-collector",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "枫铃采集器 — 关键词采集 + 内容清洗 + 多平台发布",
   "type": "module",
   "scripts": {
