@@ -1,5 +1,6 @@
 pub mod cms_client;
 pub mod hexo_exporter;
+pub mod media;
 pub mod typecho_publisher;
 pub mod wordpress_publisher;
 pub mod zblog_publisher;
@@ -13,12 +14,46 @@ pub async fn publish(
     password: &str,
     article: &Article,
 ) -> Result<(String, String), String> {
+    // 内嵌图片先上传到 CMS 媒体库，失败时保留 data URI
+    let localized;
+    let article = match article.content_md.as_deref() {
+        Some(md) if md.contains("data:image/") => {
+            if let Some(endpoint) = xmlrpc_endpoint(cms_type, conn) {
+                let md = media::upload_embedded_images(md, &endpoint, &conn.username, password)
+                    .await;
+                localized = Article {
+                    content_md: Some(md),
+                    ..article.clone()
+                };
+                &localized
+            } else {
+                article
+            }
+        }
+        _ => article,
+    };
+
     match cms_type {
         "wordpress" => wordpress_publisher::publish(conn, password, article).await,
         "typecho" => typecho_publisher::publish(conn, password, article).await,
         "zblog" => zblog_publisher::publish(conn, password, article).await,
         _ => Err("自定义 CMS 发布暂未实现".to_string()),
     }
+}
+
+/// XML-RPC 端点（与各发布器保持一致）
+fn xmlrpc_endpoint(cms_type: &str, conn: &CmsConnection) -> Option<String> {
+    let default_path = match cms_type {
+        "wordpress" => "/xmlrpc.php",
+        "typecho" => "/action/xmlrpc",
+        "zblog" => "/zb_system/xml-rpc/index.php",
+        _ => return None,
+    };
+    Some(format!(
+        "{}{}",
+        conn.site_url.trim_end_matches('/'),
+        conn.api_path.as_deref().unwrap_or(default_path)
+    ))
 }
 
 /// CMS 连接测试注册表
