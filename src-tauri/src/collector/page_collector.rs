@@ -1,8 +1,12 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 use crate::domain::ArticleInput;
 
 use super::cleaners::{clean_fragment, CleanOptions};
 use super::engine::Fetcher;
 use super::parser::{parse, CustomSelectors, ParsedPage};
+use super::postprocess;
 use super::site_adapters;
 
 /// 单页采集流程：抓取 → 解析 → 清洗 → 转 Markdown
@@ -33,7 +37,7 @@ pub async fn collect_page(
         keep_images: true,
     };
     let cleaned = clean_fragment(&parsed.content_html, &page.final_url, &opts);
-    let content_md = html2md::parse_html(&cleaned);
+    let content_md = postprocess::normalize_markdown(&html2md::parse_html(&cleaned), &parsed.title);
     let excerpt = extract_excerpt(&content_md);
 
     let input = ArticleInput {
@@ -59,27 +63,54 @@ pub async fn collect_page(
 
 /// 提取 Markdown 纯文本摘要（前 120 字）
 pub fn extract_excerpt(md: &str) -> String {
-    let text: String = md
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("```") && !l.starts_with('|'))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let cleaned: String = text
-        .replace("```", " ")
-        .replace("![", " ")
-        .replace(']', " ")
-        .replace('(', " ")
-        .replace(')', " ")
-        .replace('#', " ")
-        .replace('>', " ")
-        .replace('*', " ")
-        .replace('-', " ");
-    let collapsed: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    static MD_LINK_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"!?\[([^\]]*)\]\([^)]*\)").unwrap());
+    static MD_TOKEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[#>*_`~|]+").unwrap());
+
+    let mut in_fence = false;
+    let mut parts: Vec<&str> = Vec::new();
+    for line in md.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        // 跳过代码块、表格、纯图片行
+        if in_fence
+            || trimmed.is_empty()
+            || trimmed.starts_with('|')
+            || trimmed.starts_with("![")
+        {
+            continue;
+        }
+        parts.push(trimmed.trim_start_matches("- ").trim_start_matches("+ "));
+    }
+
+    let text = parts.join(" ");
+    let text = MD_LINK_RE.replace_all(&text, "$1");
+    let text = text.replace("**", "").replace("__", "").replace("~~", "");
+    let text = MD_TOKEN_RE.replace_all(&text, " ");
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let chars: Vec<char> = collapsed.chars().collect();
     if chars.len() > 120 {
         chars.into_iter().take(120).collect::<String>() + "..."
     } else {
         collapsed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excerpt_skips_images_code_and_markdown_noise() {
+        let md = "![封面](https://example.com/cover.png)\n\n第一段 **内容**。\n\n```rust\nfn main() {}\n```\n\n- 列表项 [链接](https://example.com)";
+        let out = extract_excerpt(md);
+        assert!(out.starts_with("第一段 内容。"));
+        assert!(!out.contains("封面"));
+        assert!(!out.contains("fn main"));
+        assert!(out.contains("列表项 链接"));
     }
 }
 

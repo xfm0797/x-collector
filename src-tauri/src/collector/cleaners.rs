@@ -35,7 +35,14 @@ const DEFAULT_REMOVE: &[&str] = &[
 ];
 
 static LINK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?i)(href|src|data-src)="([^"]+)""#).unwrap());
+    Lazy::new(|| Regex::new(r#"(?i)(href|src|data-src)=["']([^"']+)["']"#).unwrap());
+static IMG_TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<img\b[^>]*>").unwrap());
+static IMG_SRC_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)\bsrc\s*=\s*["']([^"']*)["']"#).unwrap());
+static IMG_LAZY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?is)\b(?:data-src|data-original|data-lazy-src|data-actualsrc)\s*=\s*["']([^"']+)["']"#)
+        .unwrap()
+});
 
 /// 内容清洗选项
 #[derive(Debug, Default, Clone)]
@@ -48,7 +55,8 @@ pub struct CleanOptions {
 
 /// 内容清洗：移除广告/导航/脚本 → 相对链接转绝对 → 空白规范化
 pub fn clean_fragment(html: &str, base_url: &str, opts: &CleanOptions) -> String {
-    let mut doc = Html::parse_fragment(html);
+    let html = fix_lazy_images(html);
+    let mut doc = Html::parse_fragment(&html);
 
     // 1. 收集需要移除的节点 ID
     let mut remove_css: Vec<String> = DEFAULT_REMOVE.iter().map(|s| s.to_string()).collect();
@@ -84,6 +92,44 @@ pub fn clean_fragment(html: &str, base_url: &str, opts: &CleanOptions) -> String
 
     // 4. 空白规范化
     normalize_whitespace(&absolutized)
+}
+
+/// 将懒加载图片的 data-src 提升为 src，避免 Markdown 里只剩占位图
+fn fix_lazy_images(html: &str) -> String {
+    IMG_TAG_RE
+        .replace_all(html, |caps: &regex::Captures| {
+            let tag = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+            let Some(lazy) = IMG_LAZY_RE
+                .captures(tag)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+            else {
+                return tag.to_string();
+            };
+            let current = IMG_SRC_RE
+                .captures(tag)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string());
+            let replace_needed = match current.as_deref() {
+                None => true,
+                Some(src) => {
+                    src.trim().is_empty()
+                        || src.starts_with("data:")
+                        || src.contains("placeholder")
+                        || src.contains("loading")
+                }
+            };
+            if !replace_needed {
+                return tag.to_string();
+            }
+            match current {
+                Some(_) => IMG_SRC_RE
+                    .replace(tag, format!(r#"src="{lazy}""#))
+                    .to_string(),
+                None => tag.replacen("<img", &format!(r#"<img src="{lazy}""#), 1),
+            }
+        })
+        .to_string()
 }
 
 /// 将 HTML 中的相对链接（href/src/data-src）转为绝对链接
