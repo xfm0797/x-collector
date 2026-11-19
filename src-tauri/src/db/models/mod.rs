@@ -30,7 +30,7 @@ pub(crate) fn parse_json_list<T: serde::de::DeserializeOwned>(text: Option<Strin
 mod tests {
     use super::*;
     use crate::utils::hash::{fingerprint, sha256_hex};
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -103,6 +103,57 @@ mod tests {
             ArticleRepo::get(&conn, id).unwrap().unwrap().url,
             "https://example.com/new"
         );
+    }
+
+    #[test]
+    fn cms_password_is_encrypted_and_legacy_data_migrates() {
+        let key_dir = std::env::temp_dir().join(format!("x-collector-key-test-{}", std::process::id()));
+        std::fs::create_dir_all(&key_dir).unwrap();
+        crate::utils::crypto::init(&key_dir).unwrap();
+
+        let conn = setup();
+        let input = CmsConnectionInput {
+            name: "站点".to_string(),
+            site_url: "https://example.com".to_string(),
+            username: "admin".to_string(),
+            password: Some("secret123".to_string()),
+            ..Default::default()
+        };
+        let saved = CmsRepo::save(&conn, &input).unwrap();
+
+        let stored: String = conn
+            .query_row(
+                "SELECT password FROM cms_connections WHERE id = ?1",
+                params![saved.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(stored.starts_with("v2:"), "密码应以 AES-GCM 格式存储");
+        assert_eq!(CmsRepo::get_password(&conn, saved.id).unwrap(), "secret123");
+
+        // 旧版 XOR 数据：读取时应能解密并自动迁移
+        const LEGACY_KEY: &[u8] = b"x-collector-maple-bell-2026";
+        let legacy = hex::encode(
+            "secret123"
+                .bytes()
+                .enumerate()
+                .map(|(i, b)| b ^ LEGACY_KEY[i % LEGACY_KEY.len()])
+                .collect::<Vec<_>>(),
+        );
+        conn.execute(
+            "UPDATE cms_connections SET password = ?1 WHERE id = ?2",
+            params![legacy, saved.id],
+        )
+        .unwrap();
+        assert_eq!(CmsRepo::get_password(&conn, saved.id).unwrap(), "secret123");
+        let migrated: String = conn
+            .query_row(
+                "SELECT password FROM cms_connections WHERE id = ?1",
+                params![saved.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(migrated.starts_with("v2:"));
     }
 
     #[test]

@@ -19,6 +19,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            utils::crypto::init(&data_dir)?;
             let conn = db::connection::init(&data_dir)
                 .map_err(|e| format!("数据库初始化失败：{e}"))?;
             app.manage(AppState::new(conn));

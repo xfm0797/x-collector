@@ -24,6 +24,8 @@ html2md = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 hex = "0.4"
+aes-gcm = "0.10"
+base64 = "0.22"
 tokio = { version = "1", features = ["time", "rt", "macros"] }
 regex = "1"
 rand = "0.8"

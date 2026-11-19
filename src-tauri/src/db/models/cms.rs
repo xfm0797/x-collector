@@ -59,6 +59,10 @@ impl CmsConnection {
 
 pub struct CmsRepo;
 
+fn crypto_err(e: String) -> rusqlite::Error {
+    rusqlite::Error::InvalidParameterName(e)
+}
+
 impl CmsRepo {
     pub fn list(conn: &Connection) -> rusqlite::Result<Vec<CmsConnection>> {
         let mut stmt = conn.prepare("SELECT * FROM cms_connections ORDER BY created_at DESC")?;
@@ -73,11 +77,20 @@ impl CmsRepo {
         })
     }
 
-    /// 读取（解密后的）密码，供发布模块使用
+    /// 读取（解密后的）密码，供发布模块使用；旧版 XOR 数据会自动迁移为 AES-GCM
     pub fn get_password(conn: &Connection, id: i64) -> rusqlite::Result<String> {
         let encrypted: String =
             conn.query_row("SELECT password FROM cms_connections WHERE id = ?1", params![id], |r| r.get(0))?;
-        Ok(crate::utils::hash::decrypt_password(&encrypted))
+        let (plain, legacy) = crate::utils::crypto::decrypt_password(&encrypted).map_err(crypto_err)?;
+        if legacy && !plain.is_empty() {
+            if let Ok(re_encrypted) = crate::utils::crypto::encrypt_password(&plain) {
+                conn.execute(
+                    "UPDATE cms_connections SET password = ?1 WHERE id = ?2",
+                    params![re_encrypted, id],
+                )?;
+            }
+        }
+        Ok(plain)
     }
 
     pub fn save(conn: &Connection, input: &CmsConnectionInput) -> rusqlite::Result<CmsConnection> {
@@ -91,6 +104,12 @@ impl CmsRepo {
             "typecho" => "/action/xmlrpc",
             "zblog" => "/zb_system/xml-rpc/index.php",
             _ => "",
+        };
+        let new_password = match input.password.as_deref() {
+            Some(p) if !p.is_empty() => {
+                Some(crate::utils::crypto::encrypt_password(p).map_err(crypto_err)?)
+            }
+            _ => None,
         };
 
         if let Some(id) = input.id {
@@ -106,7 +125,7 @@ impl CmsRepo {
                     input.site_url,
                     input.api_path.as_deref().filter(|s| !s.is_empty()).or(Some(default_api)),
                     input.username,
-                    input.password.as_deref().filter(|s| !s.is_empty()).map(crate::utils::hash::encrypt_password),
+                    new_password,
                     input.default_category,
                     input.default_status.as_deref().unwrap_or("publish"),
                     tag_mapping,
@@ -125,7 +144,7 @@ impl CmsRepo {
                     input.site_url,
                     input.api_path.as_deref().filter(|s| !s.is_empty()).or(Some(default_api)),
                     input.username,
-                    input.password.as_deref().map(crate::utils::hash::encrypt_password).unwrap_or_default(),
+                    new_password.unwrap_or_default(),
                     input.default_category,
                     input.default_status.as_deref().unwrap_or("publish"),
                     tag_mapping,
