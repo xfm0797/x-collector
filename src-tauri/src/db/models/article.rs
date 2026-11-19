@@ -238,8 +238,19 @@ impl ArticleRepo {
 
     pub fn delete(conn: &Connection, ids: &[i64]) -> rusqlite::Result<()> {
         for id in ids {
+            // 先取出去重所需字段，删除后同步清理 dedup_cache
+            let cached = conn
+                .query_row(
+                    "SELECT url, content_md FROM articles WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+                )
+                .ok();
             conn.execute("DELETE FROM articles WHERE id = ?1", params![id])?;
             conn.execute("DELETE FROM publish_records WHERE article_id = ?1", params![id])?;
+            if let Some((url, content_md)) = cached {
+                super::DedupRepo::remove_for_article(conn, &url, content_md.as_deref())?;
+            }
         }
         Ok(())
     }

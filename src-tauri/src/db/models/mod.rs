@@ -52,6 +52,12 @@ mod tests {
         // URL 唯一约束：重复插入返回 None
         assert!(ArticleRepo::insert_if_new(&conn, &input).unwrap().is_none());
 
+        // 模拟采集时写入的去重缓存
+        let url_hash = sha256_hex(&input.url);
+        let fp = fingerprint(input.content_md.as_deref().unwrap());
+        DedupRepo::insert(&conn, &url_hash, &sha256_hex(&input.title), &fp).unwrap();
+        assert!(DedupRepo::url_exists(&conn, &url_hash));
+
         let (list, total) = ArticleRepo::list(&conn, &ArticleQuery::default()).unwrap();
         assert_eq!(total, 1);
         assert_eq!(list[0].id, id);
@@ -59,6 +65,9 @@ mod tests {
 
         ArticleRepo::delete(&conn, &[id]).unwrap();
         assert!(ArticleRepo::get(&conn, id).unwrap().is_none());
+        // 删除文章后应同步清理去重缓存，允许重新采集
+        assert!(!DedupRepo::url_exists(&conn, &url_hash));
+        assert!(!DedupRepo::fingerprint_exists(&conn, &fp));
     }
 
     #[test]

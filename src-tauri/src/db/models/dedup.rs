@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection};
 
 use crate::domain::dedup::title_similarity;
+use crate::utils::hash::{fingerprint, sha256_hex};
 
 use super::now;
 
@@ -44,6 +45,23 @@ impl DedupRepo {
             "INSERT OR IGNORE INTO dedup_cache (url_hash, title_hash, fingerprint, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![url_hash, title_hash, fingerprint, now()],
         )?;
+        Ok(())
+    }
+
+    /// 删除文章时同步清理去重缓存：
+    /// 1. 按 URL 哈希精确删除（url_hash 为主键）；
+    /// 2. 若文章 URL 曾被编辑改过导致哈希不一致，再按内容指纹兜底清理。
+    pub fn remove_for_article(conn: &Connection, url: &str, content_md: Option<&str>) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM dedup_cache WHERE url_hash = ?1",
+            params![sha256_hex(url)],
+        )?;
+        if let Some(md) = content_md.filter(|m| !m.trim().is_empty()) {
+            conn.execute(
+                "DELETE FROM dedup_cache WHERE fingerprint = ?1 AND fingerprint <> ''",
+                params![fingerprint(md)],
+            )?;
+        }
         Ok(())
     }
 }
