@@ -1,5 +1,5 @@
 /// 极简 XML-RPC 客户端（基于 reqwest，手工构造/解析 XML）
-use super::super::collector::rss_collector::decode_entities;
+use crate::utils::html::decode_entities;
 
 /// XML-RPC 参数值
 #[derive(Debug, Clone)]

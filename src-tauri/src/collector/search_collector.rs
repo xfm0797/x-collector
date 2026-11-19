@@ -28,7 +28,7 @@ pub fn build_search_url(engine: &str, keyword: &str, page: u64, site_limit: Opti
             page.saturating_sub(1) * 10 + 1
         ),
         "sogou" => format!("https://www.sogou.com/web?query={q}&page={page}"),
-        _ => format!("https://www.baidu.com/s?wd={q}&pn={}", (page - 1) * 10),
+        _ => format!("https://www.baidu.com/s?wd={q}&pn={}", page.saturating_sub(1) * 10),
     }
 }
 
@@ -41,25 +41,76 @@ pub async fn search(
     site_limit: Option<&str>,
 ) -> Result<Vec<SearchItem>, String> {
     let mut results: Vec<SearchItem> = Vec::new();
+    let mut last_error: Option<String> = None;
+    let mut succeeded = 0usize;
 
     for page in 1..=pages.max(1) {
         let url = build_search_url(engine, keyword, page, site_limit);
         let fetched = match fetcher.fetch_text(&url).await {
             Ok(f) => f,
-            Err(_) => {
-                // 单页失败不中断整体采集
+            Err(e) => {
+                // 单页失败不中断整体采集，但记录错误用于全失败时反馈
+                last_error = Some(e);
                 continue;
             }
         };
+        succeeded += 1;
+
         let items = parse_search_results(&fetched.text, engine);
+        if items.is_empty() {
+            // 没有更多结果（或已触发反爬验证页），继续翻页没有意义
+            break;
+        }
         for item in items {
-            if !results.iter().any(|r| r.url == item.url) {
-                results.push(item);
+            let Some(url) = normalize_result_url(&item.url) else {
+                continue;
+            };
+            if !results.iter().any(|r| r.url == url) {
+                results.push(SearchItem {
+                    title: item.title,
+                    url,
+                });
             }
         }
     }
 
+    if succeeded == 0 {
+        if let Some(err) = last_error {
+            return Err(format!("搜索引擎请求失败：{err}"));
+        }
+    }
     Ok(results)
+}
+
+/// 结果 URL 归一化：仅保留 http(s)，去除 fragment 与常见跟踪参数
+pub fn normalize_result_url(raw: &str) -> Option<String> {
+    let mut url = url::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.set_fragment(None);
+    if url.query().is_some() {
+        let kept: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(k, _)| !is_tracking_param(k))
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        if kept.is_empty() {
+            url.set_query(None);
+        } else {
+            url.query_pairs_mut().clear().extend_pairs(kept);
+        }
+    }
+    Some(url.to_string())
+}
+
+fn is_tracking_param(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.starts_with("utm_")
+        || matches!(
+            key.as_str(),
+            "spm" | "scm" | "fbclid" | "gclid" | "msclkid" | "yclid" | "share_source" | "share_medium"
+        )
 }
 
 /// 解析各搜索引擎结果页
@@ -81,7 +132,11 @@ pub fn parse_search_results(html: &str, engine: &str) -> Vec<SearchItem> {
         for item in doc.select(&item_selector) {
             let Some(link) = item.select(&link_selector).next() else { continue };
             let Some(href) = link.value().attr("href") else { continue };
-            let title = link.text().collect::<String>().trim().to_string();
+            let mut title = link.text().collect::<String>().trim().to_string();
+            if title.is_empty() {
+                // 部分结果页的标题放在 title 属性上
+                title = link.value().attr("title").unwrap_or("").trim().to_string();
+            }
             if title.is_empty() || href.is_empty() {
                 continue;
             }
@@ -97,4 +152,37 @@ pub fn parse_search_results(html: &str, engine: &str) -> Vec<SearchItem> {
     }
 
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_tracking_params_and_fragment() {
+        let url = normalize_result_url("https://Example.com/post?utm_source=x&id=3&spm=abc#top")
+            .unwrap();
+        assert_eq!(url, "https://example.com/post?id=3");
+    }
+
+    #[test]
+    fn drops_query_when_only_tracking_params() {
+        let url = normalize_result_url("https://example.com/post?utm_medium=social").unwrap();
+        assert_eq!(url, "https://example.com/post");
+    }
+
+    #[test]
+    fn rejects_non_http_urls() {
+        assert!(normalize_result_url("javascript:alert(1)").is_none());
+        assert!(normalize_result_url("mailto:a@b.com").is_none());
+        assert!(normalize_result_url("/relative/path").is_none());
+    }
+
+    #[test]
+    fn falls_back_to_link_title_attribute() {
+        let html = r#"<li class="b_algo"><h2><a href="https://example.com/x" title="备用标题"></a></h2></li>"#;
+        let items = parse_search_results(html, "bing");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "备用标题");
+    }
 }

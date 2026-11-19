@@ -1,9 +1,9 @@
 pub mod anti_crawl;
 pub mod cleaners;
-pub mod dedup;
 pub mod engine;
 pub mod page_collector;
 pub mod parser;
+pub mod postprocess;
 pub mod rewriter;
 pub mod rss_collector;
 pub mod search_collector;

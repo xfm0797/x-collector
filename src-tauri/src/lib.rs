@@ -1,17 +1,17 @@
-mod commands;
+mod app;
 mod collector;
+mod commands;
 mod db;
+mod domain;
+mod events;
 mod help;
 mod publisher;
+mod services;
 mod utils;
 
-use std::sync::Mutex;
 use tauri::Manager;
 
-/// 全局应用状态：SQLite 连接
-pub struct AppState {
-    pub db: Mutex<rusqlite::Connection>,
-}
+pub use app::state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,9 +19,10 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            utils::crypto::init(&data_dir)?;
             let conn = db::connection::init(&data_dir)
                 .map_err(|e| format!("数据库初始化失败：{e}"))?;
-            app.manage(AppState { db: Mutex::new(conn) });
+            app.manage(AppState::new(conn));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

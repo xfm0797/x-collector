@@ -2,6 +2,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use super::engine::Fetcher;
+use crate::utils::html::decode_entities;
 
 /// RSS / Atom 条目
 #[derive(Debug, Clone)]
@@ -83,27 +84,41 @@ pub fn parse_feed(xml: &str) -> Vec<FeedItem> {
     items
 }
 
-/// 解析 sitemap.xml，返回全部链接
+/// 解析 sitemap.xml，返回去重后的全部链接
 pub fn parse_sitemap(xml: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     LOC_RE
         .find_iter(xml)
         .map(|m| {
             m.as_str()
                 .replace("<loc>", "")
                 .replace("</loc>", "")
+                .replace("<![CDATA[", "")
+                .replace("]]>", "")
                 .trim()
                 .to_string()
         })
         .filter(|s| !s.is_empty())
+        .filter(|s| seen.insert(s.clone()))
         .collect()
 }
 
-/// 简单 HTML 实体解码
-pub fn decode_entities(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sitemap_dedupes_and_strips_cdata() {
+        let xml = r#"<?xml version="1.0"?>
+            <urlset>
+              <url><loc>https://example.com/a</loc></url>
+              <url><loc><![CDATA[https://example.com/b]]></loc></url>
+              <url><loc> https://example.com/a </loc></url>
+            </urlset>"#;
+        assert_eq!(
+            parse_sitemap(xml),
+            vec!["https://example.com/a", "https://example.com/b"]
+        );
+    }
 }
+

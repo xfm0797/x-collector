@@ -2,11 +2,10 @@
 
 use tauri::State;
 
+use crate::app::config::CollectSettings;
 use crate::collector::engine::Fetcher;
 use crate::collector::selector_inspector;
 use crate::AppState;
-
-use super::collect_commands::load_fetch_settings;
 
 /// 抓取页面并返回 DOM 结构树（用于可视化选择器）
 #[tauri::command]
@@ -18,8 +17,8 @@ pub async fn inspect_page(
         return Err("请输入以 http/https 开头的有效 URL".to_string());
     }
     let fetch_settings = {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
-        load_fetch_settings(&conn)
+        let conn = state.conn()?;
+        CollectSettings::load(&conn).to_fetch_settings()
     };
     let fetcher = Fetcher::new(fetch_settings)?;
     selector_inspector::inspect_page(&fetcher, &url).await
@@ -39,8 +38,8 @@ pub async fn test_selector(
         return Err("请输入 CSS 选择器".to_string());
     }
     let fetch_settings = {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
-        load_fetch_settings(&conn)
+        let conn = state.conn()?;
+        CollectSettings::load(&conn).to_fetch_settings()
     };
     let fetcher = Fetcher::new(fetch_settings)?;
     selector_inspector::test_selector(&fetcher, &url, css.trim()).await

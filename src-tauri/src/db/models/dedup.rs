@@ -1,0 +1,72 @@
+use rusqlite::{params, Connection};
+
+use crate::domain::dedup::title_similarity;
+use crate::utils::hash::{fingerprint, sha256_hex};
+
+use super::now;
+
+pub struct DedupRepo;
+
+impl DedupRepo {
+    pub fn url_exists(conn: &Connection, url_hash: &str) -> bool {
+        conn.query_row("SELECT 1 FROM dedup_cache WHERE url_hash = ?1", params![url_hash], |_| Ok(()))
+            .is_ok()
+    }
+
+    pub fn fingerprint_exists(conn: &Connection, fingerprint: &str) -> bool {
+        conn.query_row(
+            "SELECT 1 FROM dedup_cache WHERE fingerprint = ?1",
+            params![fingerprint],
+            |_| Ok(()),
+        )
+        .is_ok()
+    }
+
+    /// 返回与给定标题相似（超过阈值）的已有标题数量
+    ///
+    /// 只比对最近 1000 篇，避免文章量增长后每篇采集都做全表模糊匹配。
+    pub fn find_similar_title(conn: &Connection, title: &str, threshold: f64) -> Vec<String> {
+        const SCAN_LIMIT: i64 = 1000;
+        let Ok(mut stmt) =
+            conn.prepare("SELECT title FROM articles ORDER BY collected_at DESC LIMIT ?1")
+        else {
+            return vec![];
+        };
+        let Ok(titles) = stmt.query_map(params![SCAN_LIMIT], |r| r.get::<_, String>(0)) else {
+            return vec![];
+        };
+        let mut similar = vec![];
+        for t in titles.flatten() {
+            let sim = title_similarity(&t, title);
+            if sim >= threshold {
+                similar.push(t);
+            }
+        }
+        similar
+    }
+
+    pub fn insert(conn: &Connection, url_hash: &str, title_hash: &str, fingerprint: &str) -> rusqlite::Result<()> {
+        conn.execute(
+            "INSERT OR IGNORE INTO dedup_cache (url_hash, title_hash, fingerprint, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![url_hash, title_hash, fingerprint, now()],
+        )?;
+        Ok(())
+    }
+
+    /// 删除文章时同步清理去重缓存：
+    /// 1. 按 URL 哈希精确删除（url_hash 为主键）；
+    /// 2. 若文章 URL 曾被编辑改过导致哈希不一致，再按内容指纹兜底清理。
+    pub fn remove_for_article(conn: &Connection, url: &str, content_md: Option<&str>) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM dedup_cache WHERE url_hash = ?1",
+            params![sha256_hex(url)],
+        )?;
+        if let Some(md) = content_md.filter(|m| !m.trim().is_empty()) {
+            conn.execute(
+                "DELETE FROM dedup_cache WHERE fingerprint = ?1 AND fingerprint <> ''",
+                params![fingerprint(md)],
+            )?;
+        }
+        Ok(())
+    }
+}
