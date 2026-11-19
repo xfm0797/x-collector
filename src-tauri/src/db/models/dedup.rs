@@ -23,11 +23,16 @@ impl DedupRepo {
     }
 
     /// 返回与给定标题相似（超过阈值）的已有标题数量
+    ///
+    /// 只比对最近 1000 篇，避免文章量增长后每篇采集都做全表模糊匹配。
     pub fn find_similar_title(conn: &Connection, title: &str, threshold: f64) -> Vec<String> {
-        let Ok(mut stmt) = conn.prepare("SELECT title FROM articles") else {
+        const SCAN_LIMIT: i64 = 1000;
+        let Ok(mut stmt) =
+            conn.prepare("SELECT title FROM articles ORDER BY collected_at DESC LIMIT ?1")
+        else {
             return vec![];
         };
-        let Ok(titles) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+        let Ok(titles) = stmt.query_map(params![SCAN_LIMIT], |r| r.get::<_, String>(0)) else {
             return vec![];
         };
         let mut similar = vec![];

@@ -118,13 +118,18 @@ CREATE TABLE IF NOT EXISTS dedup_cache (
 );
 
 -- 索引
-CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
+-- status 单列索引由 (status, collected_at) 复合索引覆盖
+DROP INDEX IF EXISTS idx_articles_status;
+CREATE INDEX IF NOT EXISTS idx_articles_status_collected ON articles(status, collected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source);
 CREATE INDEX IF NOT EXISTS idx_articles_collected_at ON articles(collected_at);
 CREATE INDEX IF NOT EXISTS idx_keyword_tasks_enabled ON keyword_tasks(enabled);
 CREATE INDEX IF NOT EXISTS idx_collect_logs_created ON collect_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_dedup_cache_title ON dedup_cache(title_hash);
+CREATE INDEX IF NOT EXISTS idx_dedup_cache_fingerprint ON dedup_cache(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_publish_records_article ON publish_records(article_id);
 CREATE INDEX IF NOT EXISTS idx_publish_records_status ON publish_records(status);
+CREATE INDEX IF NOT EXISTS idx_publish_records_created ON publish_records(created_at DESC);
         ",
     )?;
 
