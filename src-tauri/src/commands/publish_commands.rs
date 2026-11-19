@@ -130,8 +130,10 @@ async fn publish_batch_inner(
                     .filter(|d| !d.trim().is_empty())
                     .unwrap_or(default_hexo_dir);
                 if output_dir.trim().is_empty() {
-                    let record = record_failure(&state, article_id, None, "hexo", "未配置 Hexo 导出目录，请先在发布弹窗填写或在设置中配置默认目录").await;
-                    records.push(record);
+                    records.push(
+                        record_failure(&state, article_id, None, "hexo", "未配置 Hexo 导出目录，请先在发布弹窗填写或在设置中配置默认目录")
+                            .await?,
+                    );
                     continue;
                 }
                 let opts = hexo_exporter::HexoOptions {
@@ -141,37 +143,33 @@ async fn publish_batch_inner(
                 };
                 match hexo_exporter::export_article(&article, &opts) {
                     Ok(path) => {
-                        let record = record_success(&state, article_id, None, "hexo", "", &path).await;
-                        records.push(record);
+                        records.push(record_success(&state, article_id, None, "hexo", "", &path).await?);
                     }
                     Err(e) => {
-                        let record = record_failure(&state, article_id, None, "hexo", &e).await;
-                        records.push(record);
+                        records.push(record_failure(&state, article_id, None, "hexo", &e).await?);
                     }
                 }
             }
             "wordpress" | "typecho" | "zblog" | "custom" => {
                 let Some(cms) = cms.as_ref() else {
-                    let record = record_failure(&state, article_id, None, &publish_type, "未找到 CMS 连接").await;
-                    records.push(record);
+                    records.push(record_failure(&state, article_id, None, &publish_type, "未找到 CMS 连接").await?);
                     continue;
                 };
                 let cms_type = if publish_type == "custom" { cms.cms_type.clone() } else { publish_type.clone() };
                 let result = crate::publisher::publish(&cms_type, cms, &password, &article).await;
                 match result {
                     Ok((remote_id, remote_url)) => {
-                        let record = record_success(&state, article_id, Some(cms.id), &cms_type, &remote_id, &remote_url).await;
-                        records.push(record);
+                        records.push(
+                            record_success(&state, article_id, Some(cms.id), &cms_type, &remote_id, &remote_url).await?,
+                        );
                     }
                     Err(e) => {
-                        let record = record_failure(&state, article_id, Some(cms.id), &cms_type, &e).await;
-                        records.push(record);
+                        records.push(record_failure(&state, article_id, Some(cms.id), &cms_type, &e).await?);
                     }
                 }
             }
             _ => {
-                let record = record_failure(&state, article_id, None, &publish_type, "未知的发布方式").await;
-                records.push(record);
+                records.push(record_failure(&state, article_id, None, &publish_type, "未知的发布方式").await?);
             }
         }
     }
@@ -186,8 +184,8 @@ async fn record_success(
     publish_type: &str,
     remote_id: &str,
     remote_url: &str,
-) -> PublishRecord {
-    let conn = state.db.lock().map_err(|e| e.to_string()).unwrap();
+) -> Result<PublishRecord, String> {
+    let conn = state.conn()?;
     ArticleRepo::update_status(&conn, article_id, "published").ok();
     if let Some(id) = cms_id {
         CmsRepo::set_last_used(&conn, id).ok();
@@ -202,7 +200,7 @@ async fn record_success(
         Some(remote_url),
         None,
     )
-    .unwrap_or(0);
+    .map_err(|e| e.to_string())?;
     build_record(&conn, record_id)
 }
 
@@ -212,49 +210,19 @@ async fn record_failure(
     cms_id: Option<i64>,
     publish_type: &str,
     error: &str,
-) -> PublishRecord {
-    let conn = state.db.lock().map_err(|e| e.to_string()).unwrap();
+) -> Result<PublishRecord, String> {
+    let conn = state.conn()?;
     ArticleRepo::update_status(&conn, article_id, "failed").ok();
     let record_id = PublishRepo::insert(&conn, article_id, cms_id, publish_type, "failed", None, None, Some(error))
-        .unwrap_or(0);
+        .map_err(|e| e.to_string())?;
     build_record(&conn, record_id)
 }
 
-fn build_record(conn: &rusqlite::Connection, record_id: i64) -> PublishRecord {
-    PublishRepo::list(conn, 1000)
-        .map(|records| {
-            records
-                .into_iter()
-                .find(|r| r.id == record_id)
-                .unwrap_or(PublishRecord {
-                    id: record_id,
-                    article_id: 0,
-                    article_title: None,
-                    cms_id: None,
-                    cms_name: None,
-                    publish_type: String::new(),
-                    status: "failed".to_string(),
-                    remote_id: None,
-                    remote_url: None,
-                    error_message: None,
-                    published_at: None,
-                    created_at: None,
-                })
-        })
-        .unwrap_or(PublishRecord {
-            id: record_id,
-            article_id: 0,
-            article_title: None,
-            cms_id: None,
-            cms_name: None,
-            publish_type: String::new(),
-            status: "failed".to_string(),
-            remote_id: None,
-            remote_url: None,
-            error_message: None,
-            published_at: None,
-            created_at: None,
-        })
+/// 按 id 精确读取刚写入的发布记录，避免扫描全表
+fn build_record(conn: &rusqlite::Connection, record_id: i64) -> Result<PublishRecord, String> {
+    PublishRepo::get(conn, record_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("发布记录 {record_id} 不存在"))
 }
 
 /// 批量导出 Hexo（独立命令，不写发布记录）
