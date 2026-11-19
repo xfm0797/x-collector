@@ -71,6 +71,53 @@ mod tests {
     }
 
     #[test]
+    fn keyword_search_uses_fts_and_stays_in_sync() {
+        let conn = setup();
+        let input = ArticleInput {
+            title: "人工智能发展".to_string(),
+            url: "https://example.com/ai".to_string(),
+            content_md: Some("关于机器学习的内容".to_string()),
+            ..Default::default()
+        };
+        let id = ArticleRepo::insert_if_new(&conn, &input).unwrap().unwrap();
+
+        let search = |kw: &str| {
+            ArticleRepo::list(
+                &conn,
+                &ArticleQuery {
+                    keyword: Some(kw.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .1
+        };
+
+        // 3 字以上走 FTS trigram 子串检索
+        assert_eq!(search("人工智能"), 1);
+        assert_eq!(search("机器学习"), 1);
+        assert_eq!(search("不存在的内容"), 0);
+
+        // 更新正文后索引同步：旧内容不再命中，新内容可命中
+        let edit = ArticleInput {
+            title: "人工智能发展".to_string(),
+            url: "https://example.com/ai".to_string(),
+            content_md: Some("改成了深度学习".to_string()),
+            ..Default::default()
+        };
+        ArticleRepo::update(&conn, id, &edit).unwrap();
+        assert_eq!(search("机器学习"), 0);
+        assert_eq!(search("深度学习"), 1);
+
+        // 2 字关键词回退到 LIKE
+        assert_eq!(search("学习"), 1);
+
+        // 删除后全文索引同步清理
+        ArticleRepo::delete(&conn, &[id]).unwrap();
+        assert_eq!(search("深度学习"), 0);
+    }
+
+    #[test]
     fn update_keeps_url_when_input_empty() {
         let conn = setup();
         let input = ArticleInput {

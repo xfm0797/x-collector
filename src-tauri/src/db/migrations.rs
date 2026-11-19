@@ -1,5 +1,35 @@
 use rusqlite::Connection;
 
+/// 文章全文索引（FTS5）+ 同步触发器
+///
+/// 使用 trigram 分词器，支持中日韩文本与英文的子串检索。
+const FTS_SCHEMA: &str = "
+CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+    title, content_md, tags, source,
+    content='articles',
+    content_rowid='id',
+    tokenize='trigram'
+);
+
+CREATE TRIGGER IF NOT EXISTS articles_ai AFTER INSERT ON articles BEGIN
+    INSERT INTO articles_fts(rowid, title, content_md, tags, source)
+    VALUES (new.id, new.title, new.content_md, new.tags, new.source);
+END;
+
+CREATE TRIGGER IF NOT EXISTS articles_ad AFTER DELETE ON articles BEGIN
+    INSERT INTO articles_fts(articles_fts, rowid, title, content_md, tags, source)
+    VALUES ('delete', old.id, old.title, old.content_md, old.tags, old.source);
+END;
+
+-- 仅正文相关字段变化时重建索引，状态变更不触发
+CREATE TRIGGER IF NOT EXISTS articles_au AFTER UPDATE OF title, content_md, tags, source ON articles BEGIN
+    INSERT INTO articles_fts(articles_fts, rowid, title, content_md, tags, source)
+    VALUES ('delete', old.id, old.title, old.content_md, old.tags, old.source);
+    INSERT INTO articles_fts(rowid, title, content_md, tags, source)
+    VALUES (new.id, new.title, new.content_md, new.tags, new.source);
+END;
+";
+
 /// 数据库表结构迁移（v0.0.1）
 pub fn run(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(
@@ -132,6 +162,17 @@ CREATE INDEX IF NOT EXISTS idx_publish_records_status ON publish_records(status)
 CREATE INDEX IF NOT EXISTS idx_publish_records_created ON publish_records(created_at DESC);
         ",
     )?;
+
+    // 全文索引：首次创建时为已有文章回填索引
+    let fts_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'articles_fts')",
+        [],
+        |r| r.get(0),
+    )?;
+    conn.execute_batch(FTS_SCHEMA)?;
+    if !fts_exists {
+        conn.execute("INSERT INTO articles_fts(articles_fts) VALUES('rebuild')", [])?;
+    }
 
     // 伪原创配置默认值
     conn.execute_batch(

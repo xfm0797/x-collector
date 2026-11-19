@@ -89,6 +89,11 @@ impl Article {
     }
 }
 
+/// 将用户输入转为 FTS5 短语查询，避免特殊字符触发语法错误
+fn fts_phrase(input: &str) -> String {
+    format!("\"{}\"", input.replace('"', "\"\""))
+}
+
 pub struct ArticleRepo;
 
 impl ArticleRepo {
@@ -104,9 +109,17 @@ impl ArticleRepo {
 
         let mut where_clause = String::from("WHERE 1=1");
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        if let Some(kw) = q.keyword.as_deref().filter(|s| !s.trim().is_empty()) {
-            where_clause.push_str(" AND (title LIKE ?1 OR content_md LIKE ?1 OR tags LIKE ?1 OR source LIKE ?1)");
-            params_vec.push(Box::new(format!("%{}%", kw.trim())));
+        if let Some(kw) = q.keyword.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            // trigram 索引要求检索词至少 3 个字符，短词回退到 LIKE
+            if kw.chars().count() >= 3 {
+                where_clause.push_str(
+                    " AND id IN (SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?1)",
+                );
+                params_vec.push(Box::new(fts_phrase(kw)));
+            } else {
+                where_clause.push_str(" AND (title LIKE ?1 OR content_md LIKE ?1 OR tags LIKE ?1 OR source LIKE ?1)");
+                params_vec.push(Box::new(format!("%{}%", kw)));
+            }
         }
         if let Some(st) = q.status.as_deref().filter(|s| !s.is_empty()) {
             where_clause.push_str(&format!(" AND status = ?{}", params_vec.len() + 1));
