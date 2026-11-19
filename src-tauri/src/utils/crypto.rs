@@ -1,7 +1,8 @@
 //! CMS 密码加密存储：AES-256-GCM
 //!
-//! 密钥为每个安装随机生成，保存在应用数据目录的 `secret.key`（Unix 下权限 0600），
-//! 与数据库文件分离。旧版本的固定 XOR 混淆数据仍可读取，并在首次使用时自动迁移。
+//! 主密钥保存在操作系统钥匙串（macOS Keychain / Windows Credential Manager /
+//! Linux Secret Service）；钥匙串不可用时退回应用数据目录下的 `secret.key`
+//! （Unix 权限 0600）。旧版本的固定 XOR 混淆数据仍可读取，并在首次使用时自动迁移。
 
 use std::fs;
 use std::path::Path;
@@ -14,6 +15,8 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 const KEY_FILE: &str = "secret.key";
+const KEYRING_SERVICE: &str = "com.x-collector.desktop";
+const KEYRING_USER: &str = "database-encryption-key";
 const PREFIX: &str = "v2:";
 const NONCE_LEN: usize = 12;
 /// 仅用于解密历史数据，不再用于写入
@@ -23,7 +26,7 @@ static KEY: OnceLock<[u8; 32]> = OnceLock::new();
 
 /// 初始化加密密钥（应用启动时调用一次）
 pub fn init(data_dir: &Path) -> Result<(), String> {
-    let key = load_or_create_key(data_dir)?;
+    let key = resolve_key(data_dir)?;
     let _ = KEY.set(key);
     Ok(())
 }
@@ -75,23 +78,99 @@ fn cipher() -> Result<Aes256Gcm, String> {
     Aes256Gcm::new_from_slice(key).map_err(|_| "加密密钥长度无效".to_string())
 }
 
-fn load_or_create_key(data_dir: &Path) -> Result<[u8; 32], String> {
+fn resolve_key(data_dir: &Path) -> Result<[u8; 32], String> {
+    // 单元测试不访问系统钥匙串
+    if cfg!(test) {
+        return load_or_create_file_key(data_dir);
+    }
+
+    match keychain_key() {
+        Ok(Some(key)) => Ok(key),
+        Ok(None) => {
+            let key = match read_key_file(data_dir)? {
+                Some(key) => key,
+                None => random_key(),
+            };
+            if save_keychain_key(&key).is_ok() {
+                // 已迁移到系统钥匙串，移除本地密钥文件
+                let _ = fs::remove_file(data_dir.join(KEY_FILE));
+                Ok(key)
+            } else {
+                write_key_file(data_dir, &key)?;
+                Ok(key)
+            }
+        }
+        // 系统钥匙串不可用：退回本地密钥文件
+        Err(_) => load_or_create_file_key(data_dir),
+    }
+}
+
+fn keychain_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .map_err(|e| format!("系统钥匙串不可用：{e}"))
+}
+
+fn keychain_key() -> Result<Option<[u8; 32]>, String> {
+    match keychain_entry()?.get_password() {
+        Ok(encoded) => decode_key(encoded.trim()).map(Some),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("读取系统钥匙串失败：{e}")),
+    }
+}
+
+fn save_keychain_key(key: &[u8; 32]) -> Result<(), String> {
+    keychain_entry()?
+        .set_password(&STANDARD.encode(key))
+        .map_err(|e| format!("写入系统钥匙串失败：{e}"))
+}
+
+fn decode_key(encoded: &str) -> Result<[u8; 32], String> {
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|_| "加密密钥格式无效".to_string())?;
+    if bytes.len() != 32 {
+        return Err("加密密钥长度无效".to_string());
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes);
+    Ok(key)
+}
+
+fn random_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
+}
+
+fn read_key_file(data_dir: &Path) -> Result<Option<[u8; 32]>, String> {
     let path = data_dir.join(KEY_FILE);
     match fs::read(&path) {
         Ok(bytes) if bytes.len() == 32 => {
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
-            Ok(key)
+            Ok(Some(key))
         }
         Ok(_) => Err(format!("密钥文件格式无效：{}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut key = [0u8; 32];
-            OsRng.fill_bytes(&mut key);
-            fs::write(&path, key).map_err(|e| format!("密钥文件写入失败：{e}"))?;
-            restrict_permissions(&path);
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("密钥文件读取失败：{e}")),
+    }
+}
+
+fn write_key_file(data_dir: &Path, key: &[u8; 32]) -> Result<(), String> {
+    let path = data_dir.join(KEY_FILE);
+    fs::write(&path, key).map_err(|e| format!("密钥文件写入失败：{e}"))?;
+    restrict_permissions(&path);
+    Ok(())
+}
+
+fn load_or_create_file_key(data_dir: &Path) -> Result<[u8; 32], String> {
+    match read_key_file(data_dir)? {
+        Some(key) => Ok(key),
+        None => {
+            let key = random_key();
+            write_key_file(data_dir, &key)?;
             Ok(key)
         }
-        Err(e) => Err(format!("密钥文件读取失败：{e}")),
     }
 }
 
