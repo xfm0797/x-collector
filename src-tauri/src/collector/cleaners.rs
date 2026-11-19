@@ -43,6 +43,15 @@ static IMG_LAZY_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"(?is)\b(?:data-src|data-original|data-lazy-src|data-actualsrc)\s*=\s*["']([^"']+)["']"#)
         .unwrap()
 });
+static PRE_BLOCK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?is)<pre\b([^>]*)>(.*?)</pre>").unwrap());
+static CODE_OPEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)^<code\b([^>]*)>").unwrap());
+static CLASS_ATTR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)\bclass\s*=\s*["']([^"']*)["']"#).unwrap());
+static DATA_LANG_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?is)\bdata-(?:lang|language)\s*=\s*["']([^"']+)["']"#).unwrap()
+});
+static LANG_TOKEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9_+#.-]{1,20}$").unwrap());
 
 /// 内容清洗选项
 #[derive(Debug, Default, Clone)]
@@ -90,8 +99,109 @@ pub fn clean_fragment(html: &str, base_url: &str, opts: &CleanOptions) -> String
     let serialized = root.inner_html();
     let absolutized = absolutize_links(&serialized, base_url);
 
-    // 4. 空白规范化
-    normalize_whitespace(&absolutized)
+    // 4. 代码块语言标记补齐
+    let with_langs = inject_code_languages(&absolutized);
+
+    // 5. 空白规范化
+    normalize_whitespace(&with_langs)
+}
+
+/// 从标签属性中识别代码语言
+fn detect_language(attrs: &str) -> Option<String> {
+    if let Some(lang) = DATA_LANG_RE
+        .captures(attrs)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_lowercase())
+        .filter(|s| LANG_TOKEN_RE.is_match(s))
+    {
+        return Some(lang);
+    }
+
+    let class = CLASS_ATTR_RE.captures(attrs)?.get(1)?.as_str();
+
+    // SyntaxHighlighter 风格：class="brush: js; gutter: true"
+    if let Some(rest) = class.trim().strip_prefix("brush:") {
+        if let Some(candidate) = rest
+            .trim()
+            .split(|c: char| c.is_whitespace() || c == ';')
+            .next()
+            .map(|s| s.trim().to_lowercase())
+        {
+            if LANG_TOKEN_RE.is_match(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    for token in class.split_whitespace() {
+        let token = token.to_lowercase();
+        let candidate = if let Some(v) = token.strip_prefix("language-") {
+            v
+        } else if let Some(v) = token.strip_prefix("lang-") {
+            v
+        } else if let Some(v) = token.strip_prefix("highlight-source-") {
+            v
+        } else if let Some(v) = token.strip_prefix("highlight-") {
+            v
+        } else if let Some(v) = token.strip_prefix("brush:") {
+            v.trim()
+        } else {
+            continue;
+        };
+        if LANG_TOKEN_RE.is_match(candidate) {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+/// 确保 `<pre><code>` 上带有 html2md 能识别的 `language-xxx` class
+fn inject_code_languages(html: &str) -> String {
+    PRE_BLOCK_RE
+        .replace_all(html, |caps: &regex::Captures| {
+            let full = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+            let pre_attrs = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let body = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let Some(code) = CODE_OPEN_RE.captures(body) else {
+                return full.to_string();
+            };
+            let code_attrs = code.get(1).map(|m| m.as_str()).unwrap_or("");
+            let Some(lang) =
+                detect_language(code_attrs).or_else(|| detect_language(pre_attrs))
+            else {
+                return full.to_string();
+            };
+            let new_attrs = with_language_class(code_attrs, &lang);
+            if new_attrs == code_attrs {
+                return full.to_string();
+            }
+            let new_body = CODE_OPEN_RE
+                .replace(body, format!("<code{new_attrs}>"))
+                .to_string();
+            format!("<pre{pre_attrs}>{new_body}</pre>")
+        })
+        .to_string()
+}
+
+/// 在 code 属性中补充（或追加）language class
+fn with_language_class(attrs: &str, lang: &str) -> String {
+    let target = format!("language-{lang}");
+    if let Some(caps) = CLASS_ATTR_RE.captures(attrs) {
+        let classes = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        if classes
+            .split_whitespace()
+            .any(|t| t.eq_ignore_ascii_case(&target))
+        {
+            return attrs.to_string();
+        }
+        let merged = format!("{} {target}", classes.trim())
+            .trim()
+            .to_string();
+        return CLASS_ATTR_RE
+            .replace(attrs, format!(r#"class="{merged}""#))
+            .to_string();
+    }
+    format!("{attrs} class=\"{target}\"")
 }
 
 /// 将懒加载图片的 data-src 提升为 src，避免 Markdown 里只剩占位图
@@ -163,11 +273,25 @@ fn absolutize_links(html: &str, base_url: &str) -> String {
         .to_string()
 }
 
-/// 合并连续空白行、去除首尾空白、压缩连续 <br>
+/// 合并连续空白行、去除首尾空白、压缩连续 <br>（保留代码块内原始缩进）
 pub fn normalize_whitespace(html: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut blank_run = 0;
+    let mut pre_depth: isize = 0;
     for line in html.lines() {
+        let lower = line.to_ascii_lowercase();
+        let was_in_pre = pre_depth > 0;
+        let opens = lower.matches("<pre").count() as isize;
+        let closes = lower.matches("</pre").count() as isize;
+        pre_depth = (pre_depth + opens - closes).max(0);
+
+        // 代码块内的行原样保留，避免缩进与空行被破坏
+        if was_in_pre || opens > 0 {
+            out.push(line.to_string());
+            blank_run = 0;
+            continue;
+        }
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
             blank_run += 1;
@@ -191,4 +315,56 @@ pub fn normalize_whitespace(html: &str) -> String {
         }
     }
     result.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_language_variants() {
+        for (html, lang) in [
+            (r#"<pre><code class="lang-rust">x</code></pre>"#, "rust"),
+            (r#"<pre class="language-js"><code>x</code></pre>"#, "js"),
+            (r#"<pre><code data-lang="python">x</code></pre>"#, "python"),
+            (r#"<pre><code class="brush: go">x</code></pre>"#, "go"),
+            (
+                r#"<pre><code class="highlight-source-ts">x</code></pre>"#,
+                "ts",
+            ),
+        ] {
+            let out = inject_code_languages(html);
+            assert!(out.contains(&format!("language-{lang}")), "{out}");
+        }
+    }
+
+    #[test]
+    fn keeps_existing_language_class() {
+        let html = r#"<pre><code class="language-rust hljs">x</code></pre>"#;
+        let out = inject_code_languages(html);
+        assert_eq!(out.matches("language-rust").count(), 1);
+        assert!(out.contains("hljs"));
+    }
+
+    #[test]
+    fn markdown_contains_language_fence() {
+        let html =
+            inject_code_languages(r#"<pre><code class="lang-rust">fn main() {}</code></pre>"#);
+        let md = html2md::parse_html(&html);
+        assert!(md.contains("```rust"), "{md}");
+    }
+
+    #[test]
+    fn preserves_code_block_indentation() {
+        let html = "<pre><code>fn main() {\n    let x = 1;\n\n    call();\n}</code></pre>";
+        let out = normalize_whitespace(html);
+        assert!(out.contains("    let x = 1;"), "{out}");
+        assert!(out.contains("\n\n    call();"), "{out}");
+    }
+
+    #[test]
+    fn does_not_guess_without_hint() {
+        let html = r#"<pre><code class="hljs">x</code></pre>"#;
+        assert_eq!(inject_code_languages(html), html);
+    }
 }
