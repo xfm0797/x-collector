@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use super::anti_crawl;
+use crate::utils::retry::RetryError;
 
 /// 采集请求设置（从 settings 表读取）
 #[derive(Debug, Clone, Deserialize)]
@@ -33,7 +36,7 @@ pub struct FetchedPage {
     pub text: String,
 }
 
-/// HTTP 抓取引擎：UA 轮换 + 完整请求头 + 随机延迟 + 指数退避重试 + 编码识别 + Cookie 携带
+/// HTTP 抓取引擎：UA 轮换 + 完整请求头 + 随机延迟 + 分类重试 + 编码识别 + Cookie 携带
 pub struct Fetcher {
     client: reqwest::Client,
     settings: FetchSettings,
@@ -41,8 +44,11 @@ pub struct Fetcher {
 
 impl Fetcher {
     pub fn new(settings: FetchSettings) -> Result<Self, String> {
+        let timeout = Duration::from_secs(settings.timeout.max(5));
         let mut builder = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(settings.timeout.max(5)))
+            .timeout(timeout)
+            // 建连与读取分开限时，避免慢站点长时间占用
+            .connect_timeout(Duration::from_secs(settings.timeout.clamp(5, 10)))
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::limited(10));
         if !settings.proxy_url.is_empty() {
@@ -76,7 +82,7 @@ impl Fetcher {
                         ))
                         .send()
                         .await
-                        .map_err(|e| format!("请求失败：{e}"))?;
+                        .map_err(|e| classify_request_error(&e, settings.timeout))?;
 
                     let status = base.status();
                     let content_type = base
@@ -85,11 +91,21 @@ impl Fetcher {
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("")
                         .to_string();
+                    let retry_after = parse_retry_after(base.headers());
                     let final_url = base.url().to_string();
-                    let bytes = base.bytes().await.map_err(|e| format!("读取响应失败：{e}"))?;
+                    let bytes = base
+                        .bytes()
+                        .await
+                        .map_err(|e| RetryError::retryable(format!("读取响应失败：{e}")))?;
 
                     if !status.is_success() {
-                        return Err(format!("HTTP {}", status.as_u16()));
+                        let code = status.as_u16();
+                        let message = format!("HTTP {code}");
+                        return if is_retryable_status(code) {
+                            Err(RetryError::retryable(message).with_retry_after(retry_after))
+                        } else {
+                            Err(RetryError::fatal(message))
+                        };
                     }
 
                     let text = decode_body(&bytes, &content_type);
@@ -103,12 +119,70 @@ impl Fetcher {
     }
 }
 
+/// 请求发送失败：区分超时/连接类临时故障与永久失败
+fn classify_request_error(err: &reqwest::Error, timeout_secs: u64) -> RetryError {
+    if err.is_builder() || err.is_redirect() {
+        // 配置错误、重定向超限：重试无法解决
+        RetryError::fatal(format!("请求失败：{err}"))
+    } else if err.is_timeout() {
+        RetryError::retryable(format!("请求超时（{}s）", timeout_secs.max(5)))
+    } else if err.is_connect() {
+        RetryError::retryable(format!("连接失败：{err}"))
+    } else if err.is_body() {
+        RetryError::retryable(format!("读取响应失败：{err}"))
+    } else if err.is_request() {
+        RetryError::retryable(format!("请求失败：{err}"))
+    } else {
+        RetryError::fatal(format!("请求失败：{err}"))
+    }
+}
+
+/// 408 请求超时、425 Too Early、429 限流与常见的临时性 5xx 可重试
+fn is_retryable_status(code: u16) -> bool {
+    matches!(code, 408 | 425 | 429 | 500 | 502 | 503 | 504)
+}
+
+/// 解析 Retry-After（秒），最多等待 10s
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let secs: u64 = value.trim().parse().ok()?;
+    Some(Duration::from_secs(secs.min(10)))
+}
+
 /// 取 URL 的站点根（作为 Referer）
 fn base_of(url: &str) -> String {
     url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(|h| format!("{}://{}/", u.scheme(), h)))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retryable_status_classification() {
+        for code in [408, 425, 429, 500, 502, 503, 504] {
+            assert!(is_retryable_status(code), "HTTP {code} 应可重试");
+        }
+        for code in [400, 401, 403, 404, 410, 501] {
+            assert!(!is_retryable_status(code), "HTTP {code} 不应重试");
+        }
+    }
+
+    #[test]
+    fn retry_after_is_capped() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "3600".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(10)));
+
+        headers.insert(reqwest::header::RETRY_AFTER, "3".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(3)));
+
+        headers.insert(reqwest::header::RETRY_AFTER, "abc".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), None);
+    }
 }
 
 /// 响应体解码：优先 HTTP 头 charset，其次 meta 嗅探，兜底 UTF-8（支持 GBK 站点）
